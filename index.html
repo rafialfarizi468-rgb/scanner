@@ -123,17 +123,48 @@ function renderScanner() {
 }
 function tick() { const c = $('#clock'); if (c) c.textContent = new Date().toTimeString().slice(0, 8); }
 
+function errText(e) {
+  const raw = String((e && (e.message || e.name)) || e || '');
+  const l = raw.toLowerCase();
+  let msg;
+  if (l.includes('notallowed') || l.includes('permission') || l.includes('denied')) msg = 'Izin kamera ditolak. Klik ikon gembok di samping alamat, ubah Kamera menjadi Izinkan, lalu muat ulang halaman. Di Windows, cek juga Settings > Privacy & security > Camera.';
+  else if (l.includes('notfound') || l.includes('not found') || l.includes('no camera') || l.includes('requested device')) msg = 'Perangkat ini tidak mendeteksi kamera (laptop/PC tanpa webcam?). Buka halaman ini dari HP.';
+  else if (l.includes('notreadable') || l.includes('could not start') || l.includes('in use') || l.includes('busy')) msg = 'Kamera sedang dipakai aplikasi atau tab lain. Tutup Zoom/Meet/aplikasi Camera, lalu tekan "Mulai kamera" lagi.';
+  else if (l.includes('secure') || l.includes('https')) msg = 'Halaman harus dibuka lewat https agar kamera bisa dipakai.';
+  else msg = 'Kamera tidak bisa dibuka.';
+  return { msg: msg, raw: raw };
+}
+async function tryStart(camera) {
+  const s = new Html5Qrcode('reader');
+  try {
+    await s.start(camera, { fps: 10, qrbox: (w, h) => { const m = Math.floor(Math.min(w, h) * 0.75); return { width: m, height: m }; } }, onScan, () => {});
+    scanner = s; return;
+  } catch (e) { try { s.clear(); } catch (x) {} throw e; }
+}
 async function startScan() {
   if (scanner) return;
-  try {
-    scanner = new Html5Qrcode('reader');
-    await scanner.start({ facingMode: { ideal: facing } }, { fps: 10, qrbox: (w, h) => { const m = Math.floor(Math.min(w, h) * 0.75); return { width: m, height: m }; } }, onScan, () => {});
-  } catch (e) {
-    scanner = null;
-    const el = $('#res'); if (!el) return;
-    el.className = 'res err';
-    el.innerHTML = '<big>❌ Kamera tidak bisa dibuka</big>Izinkan akses kamera di browser (ikon gembok di samping alamat), pastikan halaman dibuka lewat https, lalu tekan "Mulai kamera" lagi.';
+  const el = $('#res');
+  if (el) { el.className = 'res'; el.textContent = 'Membuka kamera...'; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    if (el) { el.className = 'res err'; el.innerHTML = '<big>❌ Kamera tidak didukung</big>Browser ini tidak mendukung kamera, atau halaman tidak dibuka lewat https. Coba Chrome atau Safari terbaru.'; }
+    return;
   }
+  let lastErr = null;
+  // 1) coba kamera sesuai arah (belakang/depan), 2) coba kamera apa pun yang terdeteksi
+  const attempts = [{ facingMode: { ideal: facing } }, { facingMode: facing }];
+  for (const c of attempts) {
+    try { await tryStart(c); if (el) { el.className = 'res'; el.textContent = 'Kamera aktif. Arahkan ke QR siswa'; } return; } catch (e) { lastErr = e; }
+  }
+  try {
+    const cams = await Html5Qrcode.getCameras();
+    if (!cams || !cams.length) throw new Error('NotFoundError: no camera');
+    const back = cams.find(c => /back|rear|belakang|environment/i.test(c.label));
+    await tryStart((back || cams[0]).id);
+    if (el) { el.className = 'res'; el.textContent = 'Kamera aktif. Arahkan ke QR siswa'; }
+    return;
+  } catch (e) { lastErr = e; }
+  const t = errText(lastErr);
+  if (el) { el.className = 'res err'; el.innerHTML = '<big>❌ Kamera tidak bisa dibuka</big>' + esc(t.msg) + '<div class="muted" style="font-size:.78rem;margin-top:8px;font-weight:500">Kode: ' + esc(t.raw) + '</div>'; }
 }
 async function stopScan() {
   if (scanner) { try { await scanner.stop(); scanner.clear(); } catch (e) {} scanner = null; }
